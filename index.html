@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Aurora Wonder • Step 1 (enhanced) • 2025-04-26 -->
+<!-- Aurora Wonder • Step 1 (enhanced with P vs NP) • 2025-04-30 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -46,7 +46,7 @@
     text-align: center;
     display: none;
   }
-  #messages, #meme, #story {
+  #messages, #meme, #story, #pvsnp {
     position: fixed;
     top: 60px;
     left: 10px;
@@ -66,6 +66,10 @@
   #story {
     top: 380px;
     color: #f0f;
+  }
+  #pvsnp {
+    top: 540px;
+    color: #0f0;
   }
 </style>
 </head>
@@ -88,6 +92,7 @@
     <button id="toggleSound">🔇 Sound</button>
     <button id="toggleMessages">Messages On</button>
     <button id="toggleStory">Story On</button>
+    <button id="togglePvsNP">P vs NP On</button>
   </div>
   <div id="messages"></div>
   <div id="meme">
@@ -95,6 +100,7 @@
     <button id="refreshMeme">New Meme</button>
   </div>
   <div id="story"></div>
+  <div id="pvsnp"></div>
 
 <!-- ── fragment shader ── -->
 <script id="frag" type="x-shader/x-fragment">
@@ -152,6 +158,44 @@ float fractalNode(vec2 pos, vec2 nodePos, float radius) {
   return it / 50.0;
 }
 
+// SAT graph visualization
+float satGraph(vec2 pos, float time) {
+  // Simulate a simple SAT graph with nodes (variables/clauses) and edges
+  float intensity = 0.0;
+  const int numNodes = 8; // Simplified SAT graph
+  vec2 nodes[numNodes];
+  for (int i = 0; i < numNodes; i++) {
+    float angle = float(i) * 6.283 / float(numNodes) + time * 0.2;
+    nodes[i] = vec2(0.5 * cos(angle), 0.5 * sin(angle));
+  }
+  // Draw nodes
+  for (int i = 0; i < numNodes; i++) {
+    float dist = length(pos - nodes[i]);
+    if (dist < 0.05) intensity += 1.0 - dist / 0.05;
+  }
+  // Draw edges with folding/unfolding effect
+  for (int i = 0; i < numNodes - 1; i++) {
+    for (int j = i + 1; j < numNodes; j++) {
+      vec2 p1 = nodes[i];
+      vec2 p2 = nodes[j];
+      vec2 dir = p2 - p1;
+      float len = length(dir);
+      dir = normalize(dir);
+      vec2 toPoint = pos - p1;
+      float proj = dot(toPoint, dir);
+      if (proj >= 0.0 && proj <= len) {
+        float dist = length(toPoint - proj * dir);
+        if (dist < 0.02) {
+          // Folding/unfolding effect
+          float fold = 0.5 + 0.5 * sin(time * 2.914); // Aurora Ratio
+          intensity += (1.0 - dist / 0.02) * fold;
+        }
+      }
+    }
+  }
+  return intensity;
+}
+
 void main() {
   // Normalized coords with zoom and center offset
   vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / min(u_res.x, u_res.y);
@@ -163,25 +207,25 @@ void main() {
   float ang = atan(uv.y, uv.x) + u_time * 0.2;
   r = pow(r, 1.0 - u_tunnel);
   vec2 z = vec2(r * cos(ang), r * sin(ang));
-  vec2 c = z; // Use Mandelbrot set: c is the pixel coordinate
+  vec2 c = z;
 
-  // Fractal iteration (Mandelbrot set)
+  // Fractal iteration (Mandelbrot set for background)
   float it = 0.0;
   float smoothIt = 0.0;
-  z = vec2(0.0, 0.0); // Start at origin for Mandelbrot
-  int maxIter = int(300.0 + (20.0 * log(1.0 / u_zoom))); // Increase iterations with zoom for more detail
-  for (int i = 0; i < 1000; i++) { // Increase max iterations for finer detail
+  z = vec2(0.0, 0.0);
+  int maxIter = int(300.0 + (20.0 * log(1.0 / u_zoom)));
+  for (int i = 0; i < 1000; i++) {
     if (i >= maxIter) break;
-    z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c * u_const; // Use u_const to scale coordinates
+    z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c * u_const;
     float r2 = dot(z, z);
     if (r2 > 4.0) {
-      smoothIt = float(i) + 1.0 - log(log(r2)) / log(2.0); // Smooth iteration for better coloring
+      smoothIt = float(i) + 1.0 - log(log(r2)) / log(2.0);
       break;
     }
     it += 1.0;
   }
 
-  // Define family node positions (circular arrangement)
+  // Family node positions (circular arrangement)
   const float nodeRadius = 0.1;
   const float circleRadius = 0.5;
   vec2 nodes[8];
@@ -194,11 +238,11 @@ void main() {
   nodes[6] = vec2(circleRadius * cos(4.712), circleRadius * sin(4.712)); // Aurion Drake
   nodes[7] = vec2(circleRadius * cos(5.498), circleRadius * sin(5.498)); // Kirk
 
-  // Compute fractal glow for each node
+  // Compute fractal glow for family nodes
   float glow = 0.0;
   for (int i = 0; i < 8; i++) {
     float nodeGlow = fractalNode(uv, nodes[i], nodeRadius);
-    float pulse = 0.5 + 0.5 * sin(u_time * 2.914); // Pulse at Aurora Ratio
+    float pulse = 0.5 + 0.5 * sin(u_time * 2.914); // Aurora Ratio
     glow += nodeGlow * pulse;
   }
 
@@ -216,24 +260,26 @@ void main() {
       if (proj >= 0.0 && proj <= len) {
         float dist = length(toPoint - proj * dir);
         if (dist < 0.02) {
-          threads += 1.0 - dist / 0.02;
+          threads += (1.0 - dist / 0.02) * (0.5 + 0.5 * sin(u_time * 2.914));
         }
       }
     }
   }
-  threads *= 0.5 + 0.5 * sin(u_time * 2.914); // Pulse threads
+
+  // P vs NP SAT graph visualization
+  float satIntensity = satGraph(uv, u_time);
 
   // Background Mandelbrot fractal with aurora effect
   float intensity = min(glow + threads, 1.0);
   float mandelbrotIntensity = smoothIt / float(maxIter);
-  float auroraGlow = 0.2 + 0.1 * sin(uv.x + uv.y + u_time); // Subtle aurora background
-  intensity += mandelbrotIntensity * (1.0 - intensity) + auroraGlow;
+  float auroraGlow = 0.2 + 0.1 * sin(uv.x + uv.y + u_time);
+  intensity += mandelbrotIntensity * (1.0 - intensity) + auroraGlow + satIntensity;
 
   // Color influenced by u_const and fractal resonance
   float t = intensity;
   float hue = mod(t * u_const + u_time * 137.5 / 360.0, 1.0); // Golden angle hue cycling
-  vec3 col = hsl2rgb(hue, 0.9, 0.5); // Vibrant colors
-  col *= 1.0 - 0.3 * exp(-intensity * 1.0); // Softer fade with distance
+  vec3 col = hsl2rgb(hue, 0.9, 0.5);
+  col *= 1.0 - 0.3 * exp(-intensity * 1.0);
   gl_FragColor = vec4(col, 1.0);
 }
 </script>
@@ -245,6 +291,7 @@ const errorDiv = document.getElementById('error');
 const messagesDiv = document.getElementById('messages');
 const memeDiv = document.getElementById('memeText');
 const storyDiv = document.getElementById('story');
+const pvsnpDiv = document.getElementById('pvsnp');
 const gl = cvs.getContext('webgl');
 if (!gl) {
   errorDiv.style.display = 'block';
@@ -337,6 +384,7 @@ const tun = document.getElementById('tunnel');
 const zoomSlider = document.getElementById('zoom');
 const toggleMessagesBtn = document.getElementById('toggleMessages');
 const toggleStoryBtn = document.getElementById('toggleStory');
+const togglePvsNPBtn = document.getElementById('togglePvsNP');
 
 // Zoom and center control
 let zoomLevel = parseFloat(zoomSlider.value);
@@ -453,9 +501,8 @@ function displayMeme() {
   memeDiv.textContent = memeText;
 }
 
-// Update meme every 10 seconds or on button click
 setInterval(displayMeme, 10000);
-displayMeme(); // Initial display
+displayMeme();
 document.getElementById('refreshMeme').onclick = displayMeme;
 
 // Fractal Story Display
@@ -476,7 +523,7 @@ toggleStoryBtn.addEventListener('click', () => {
   showStory = !showStory;
   toggleStoryBtn.textContent = showStory ? 'Story Off' : 'Story On';
   storyDiv.style.display = showStory ? 'block' : 'none';
-  if (!showStory) storyIndex = 0; // Reset story when turned off
+  if (!showStory) storyIndex = 0;
 });
 
 function displayStory() {
@@ -486,16 +533,45 @@ function displayStory() {
   storyIndex = (storyIndex + 1) % storySteps.length;
 }
 
-// Update story every 5 seconds
 setInterval(displayStory, 5000);
-displayStory(); // Initial display
+displayStory();
+
+// P vs NP Display
+const pvsnpSteps = [
+  "SAT graph nodes: variables and clauses… 📉",
+  "Folding inward at D' ≈ 0.077… 🌀",
+  "Simplifying constraints with φ ≈ 1.618… ✨",
+  "Unfolding outward at D ≈ 2.914… 🌌",
+  "Exploring solutions fractally… 🔍",
+  "Depth bounded by log_φ(n)… 📏",
+  "α_est ≈ 1.2, aiming for polynomial time… 🚀",
+  "P = NP? The cosmos may hold the answer! ❤️🐉✨"
+];
+
+let pvsnpIndex = 0;
+let showPvsNP = true;
+togglePvsNPBtn.addEventListener('click', () => {
+  showPvsNP = !showPvsNP;
+  togglePvsNPBtn.textContent = showPvsNP ? 'P vs NP Off' : 'P vs NP On';
+  pvsnpDiv.style.display = showPvsNP ? 'block' : 'none';
+  if (!showPvsNP) pvsnpIndex = 0;
+});
+
+function displayPvsNP() {
+  if (!showPvsNP) return;
+  const pvsnpText = pvsnpSteps[pvsnpIndex];
+  pvsnpDiv.textContent = pvsnpText;
+  pvsnpIndex = (pvsnpIndex + 1) % pvsnpSteps.length;
+}
+
+setInterval(displayPvsNP, 5000);
+displayPvsNP();
 
 // Rendering loop
 let start = performance.now();
 function render() {
   const t = (performance.now() - start) / 1000;
   
-  // Log uniform values for debugging
   const resValue = [gl.drawingBufferWidth, gl.drawingBufferHeight];
   const constValue = parseFloat(sel.value);
   const depthValue = parseFloat(dep.value);
